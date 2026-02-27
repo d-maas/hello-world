@@ -16,8 +16,7 @@ const CONFIG = {
   POINTS_PER_BUBBLE: 10,  // score awarded per bubble cleared
 
   // ── Head bubble (special type; renders as a face image instead of a colour) ─
-  HEAD_ID:        'head',       // internal identifier – never treated as a colour string
-  HEAD_CHANCE:    0.12,         // probability any randomly generated bubble is a head
+  HEAD_ID:        'head',       // internal identifier – treated like a colour for all game logic
   HEAD_IMAGE_SRC: 'piet.jpg',   // path to the head photo (place the file next to index.html)
 
   // ── Aim guide ───────────────────────────────────────────────────────────────
