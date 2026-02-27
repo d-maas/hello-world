@@ -67,18 +67,36 @@ function neighbors(r, c) {
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-let grid, score, shotsFired, gameOver, winner, flying, shooter;
+let grid, score, shotsFired, pendingNewRow, availableColors, gameOver, winner, flying, shooter;
 
-function rndColor() { return COLORS[Math.random() * COLORS.length | 0]; }
+// Always draw from the shrinking pool of colors still in play.
+function rndColor() {
+  return availableColors[Math.random() * availableColors.length | 0];
+}
+
+// After any grid change, drop colors that no longer exist anywhere.
+// A color survives if it is still in the grid, the cannon, or the next slot.
+function pruneColors() {
+  const inPlay = new Set();
+  for (let r = 0; r < MAX_ROWS; r++)
+    for (let c = 0; c < colCount(r); c++)
+      if (grid[r][c]) inPlay.add(grid[r][c]);
+  inPlay.add(shooter.color);
+  inPlay.add(shooter.next);
+  if (flying) inPlay.add(flying.color);
+  availableColors = availableColors.filter(col => inPlay.has(col));
+}
 
 function init() {
-  grid       = Array.from({ length: MAX_ROWS }, (_, r) => new Array(colCount(r)).fill(null));
-  score      = 0;
-  shotsFired = 0;
-  gameOver   = false;
-  winner     = false;
-  flying     = null;
-  shooter    = { x: W / 2, y: H - 50, angle: -Math.PI / 2, color: rndColor(), next: rndColor() };
+  availableColors = [...COLORS];   // full palette; shrinks as colours are cleared
+  grid            = Array.from({ length: MAX_ROWS }, (_, r) => new Array(colCount(r)).fill(null));
+  score           = 0;
+  shotsFired      = 0;
+  pendingNewRow   = false;
+  gameOver        = false;
+  winner          = false;
+  flying          = null;
+  shooter         = { x: W / 2, y: H - 50, angle: -Math.PI / 2, color: rndColor(), next: rndColor() };
 
   for (let r = 0; r < FILL_ROWS; r++)
     for (let c = 0; c < colCount(r); c++)
@@ -152,6 +170,16 @@ function attach(px, py, col) {
         if (grid[rr][cc] && !conn.has(`${rr},${cc}`)) { grid[rr][cc] = null; pts++; }
   }
 
+  // Prune eliminated colours after pops/drops, then add a new row if this
+  // shot was the one that triggered the threshold (timing fix: we do it here,
+  // AFTER the bubble has already landed and resolved, not at fire-time).
+  pruneColors();
+  if (pendingNewRow) {
+    pendingNewRow = false;
+    addNewRow();   // addNewRow uses rndColor() → respects pruned palette
+    pruneColors(); // new row may contain only surviving colours; re-check
+  }
+
   if (!gameOver && checkGameOver()) gameOver = true;
   if (!gameOver && !winner && checkWinner()) winner = true;
 
@@ -212,7 +240,7 @@ function shoot() {
   playShootSound();
 
   shotsFired++;
-  if (shotsFired % SHOTS_PER_NEW_ROW === 0) addNewRow();
+  if (shotsFired % SHOTS_PER_NEW_ROW === 0) pendingNewRow = true;
 }
 
 // ── Update ────────────────────────────────────────────────────────────────────
