@@ -2,25 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Bubble Shooter</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       background: #0f0f23;
       display: flex;
-      flex-direction: column;
       justify-content: center;
       align-items: center;
       height: 100vh;
+      height: 100dvh;      /* mobile: excludes collapsing address-bar */
+      overflow: hidden;
       font-family: sans-serif;
     }
-    canvas { border: 2px solid #2a2a4a; border-radius: 6px; cursor: crosshair; }
-    p { color: rgba(255,255,255,.3); font-size: 12px; margin-top: 8px; }
+    canvas {
+      border: 2px solid #2a2a4a;
+      border-radius: 6px;
+      cursor: crosshair;
+      touch-action: none;                /* let JS own all touch events */
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+    }
   </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<p>Move mouse to aim &bull; Click or Space to shoot</p>
 <script src="config.js"></script>
 <script>
 // ── Unpack config ─────────────────────────────────────────────────────────────
@@ -41,6 +49,16 @@ const ctx    = canvas.getContext('2d');
 const W = 400, H = 600;
 canvas.width  = W;
 canvas.height = H;
+
+// Scale the canvas display size to fill the viewport while keeping aspect ratio.
+// The internal resolution (W×H) never changes, so all game logic is unaffected.
+function fitCanvas() {
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+  canvas.style.width  = Math.round(W * scale) + 'px';
+  canvas.style.height = Math.round(H * scale) + 'px';
+}
+window.addEventListener('resize', fitCanvas);
+fitCanvas();
 
 // ── Head bubble image ─────────────────────────────────────────────────────────
 // Drop any photo as HEAD_IMAGE_SRC (config.js) next to this file.
@@ -469,16 +487,17 @@ function draw() {
 
   // Toast and overlays
   drawWijntje();
-  if (winner)   drawOverlay('You Win!',  '#f1c40f', `Score: ${score}`, 'Click or Space to play again');
-  if (gameOver) drawOverlay('Game Over', '#e74c3c', `Score: ${score}`, 'Click or Space to restart');
+  if (winner)   drawOverlay('You Win!',  '#f1c40f', `Score: ${score}`, 'Tap or click to play again');
+  if (gameOver) drawOverlay('Game Over', '#e74c3c', `Score: ${score}`, 'Tap or click to restart');
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 
 function setAngle(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
-  const dx = clientX - rect.left - shooter.x;
-  const dy = clientY - rect.top  - shooter.y;
+  // Convert CSS pixels → internal canvas pixels before comparing with shooter coords
+  const dx = (clientX - rect.left) * (W / rect.width)  - shooter.x;
+  const dy = (clientY - rect.top)  * (H / rect.height) - shooter.y;
   shooter.angle = Math.max(-Math.PI + .15, Math.min(-.15, Math.atan2(dy, dx)));
 }
 
@@ -489,14 +508,25 @@ canvas.addEventListener('click', () => {
   shoot();
 });
 
-canvas.addEventListener('touchmove', e => {
-  e.preventDefault();
-  setAngle(e.touches[0].clientX, e.touches[0].clientY);
-}, { passive: false });
+// Touch UX: drag to aim, lift finger to shoot.
+// touchRestarted prevents the touchend of a restart gesture from also firing a shot.
+let touchRestarted = false;
 
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
-  if (gameOver || winner) { init(); return; }
+  if (gameOver || winner) { init(); touchRestarted = true; return; }
+  touchRestarted = false;
+  setAngle(e.touches[0].clientX, e.touches[0].clientY);
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (e.touches.length) setAngle(e.touches[0].clientX, e.touches[0].clientY);
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (touchRestarted) { touchRestarted = false; return; }
   shoot();
 }, { passive: false });
 
