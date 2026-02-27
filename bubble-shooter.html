@@ -28,6 +28,8 @@ const {
   R, COLS, MAX_ROWS, FILL_ROWS,
   BUBBLE_SPEED, MATCH_COUNT, SHOTS_PER_NEW_ROW, POINTS_PER_BUBBLE,
   AIM_GUIDE_LENGTH, AIM_GUIDE_POST_BOUNCE,
+  HEAD_ID, HEAD_CHANCE, HEAD_IMAGE_SRC,
+  WIJNTJE_TEXT, WIJNTJE_MIN_POP, WIJNTJE_DURATION,
   COLORS,
 } = CONFIG;
 
@@ -39,6 +41,12 @@ const ctx    = canvas.getContext('2d');
 const W = 400, H = 600;
 canvas.width  = W;
 canvas.height = H;
+
+// ── Head bubble image ─────────────────────────────────────────────────────────
+// Drop any photo as HEAD_IMAGE_SRC (config.js) next to this file.
+// While the image is loading (or missing) the bubble shows a plain skin-tone fill.
+const HEAD_IMG = new Image();
+HEAD_IMG.src = HEAD_IMAGE_SRC;
 
 // ── Grid helpers ──────────────────────────────────────────────────────────────
 
@@ -67,10 +75,13 @@ function neighbors(r, c) {
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-let grid, score, shotsFired, pendingNewRow, availableColors, gameOver, winner, flying, shooter;
+let grid, score, shotsFired, pendingNewRow, availableColors, gameOver, winner, flying, shooter,
+    wijntjeTimer, wijntjeStart;
 
 // Always draw from the shrinking pool of colors still in play.
+// HEAD_ID is excluded from availableColors and handled via HEAD_CHANCE instead.
 function rndColor() {
+  if (Math.random() < HEAD_CHANCE) return HEAD_ID;
   return availableColors[Math.random() * availableColors.length | 0];
 }
 
@@ -93,6 +104,8 @@ function init() {
   score           = 0;
   shotsFired      = 0;
   pendingNewRow   = false;
+  wijntjeTimer    = 0;
+  wijntjeStart    = 0;
   gameOver        = false;
   winner          = false;
   flying          = null;
@@ -168,6 +181,11 @@ function attach(px, py, col) {
     for (let rr = 0; rr < MAX_ROWS; rr++)
       for (let cc = 0; cc < colCount(rr); cc++)
         if (grid[rr][cc] && !conn.has(`${rr},${cc}`)) { grid[rr][cc] = null; pts++; }
+    // Big-pop toast
+    if (group.length >= WIJNTJE_MIN_POP) {
+      wijntjeStart = Date.now();
+      wijntjeTimer = wijntjeStart + WIJNTJE_DURATION;
+    }
   }
 
   // Prune eliminated colours after pops/drops, then add a new row if this
@@ -277,14 +295,30 @@ function update() {
 // ── Render ────────────────────────────────────────────────────────────────────
 
 function drawBubble(x, y, col, r = R) {
+  // Base fill
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fillStyle = col;
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,.18)';
+  if (col === HEAD_ID) {
+    ctx.fillStyle = '#fad5a5';   // skin-tone background for the face
+    ctx.fill();
+    // Draw SVG face clipped to the bubble circle (path is still active after fill)
+    if (HEAD_IMG.complete && HEAD_IMG.naturalWidth > 0) {
+      ctx.save();
+      ctx.clip();
+      ctx.drawImage(HEAD_IMG, x - r, y - r, r * 2, r * 2);
+      ctx.restore();
+    }
+  } else {
+    ctx.fillStyle = col;
+    ctx.fill();
+  }
+
+  // Outline
+  ctx.strokeStyle = col === HEAD_ID ? 'rgba(180,120,60,.5)' : 'rgba(255,255,255,.18)';
   ctx.lineWidth = 1.5;
   ctx.stroke();
-  // Glossy sheen
+
+  // Glossy sheen (same for all bubble types)
   const g = ctx.createRadialGradient(x - r * .32, y - r * .35, r * .05, x, y, r);
   g.addColorStop(0,   'rgba(255,255,255,.48)');
   g.addColorStop(.5,  'rgba(255,255,255,0)');
@@ -293,6 +327,47 @@ function drawBubble(x, y, col, r = R) {
   ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fillStyle = g;
   ctx.fill();
+}
+
+function drawWijntje() {
+  const now = Date.now();
+  if (!wijntjeTimer || now >= wijntjeTimer) return;
+
+  const elapsed   = now - wijntjeStart;
+  const remaining = wijntjeTimer - now;
+  const fadeIn  = 180;   // ms to reach full opacity
+  const fadeOut = 450;   // ms to fade out at the end
+  const alpha = elapsed < fadeIn   ? elapsed / fadeIn
+              : remaining < fadeOut ? remaining / fadeOut
+              : 1;
+
+  const bw = 294, bh = 62;
+  const bx = (W - bw) / 2;
+  const by = H / 2 - 110;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Card background
+  ctx.fillStyle = 'rgba(12, 8, 30, 0.93)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, 10);
+  else ctx.rect(bx, by, bw, bh);
+  ctx.fill();
+
+  // Gold border
+  ctx.strokeStyle = 'rgba(255, 210, 50, 0.8)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Message
+  ctx.fillStyle = '#ffd740';
+  ctx.font = 'bold 25px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(WIJNTJE_TEXT, W / 2, by + bh / 2 + 9);
+  ctx.textAlign = 'left';
+
+  ctx.restore();
 }
 
 function drawAimGuide() {
@@ -394,7 +469,8 @@ function draw() {
   ctx.fillText(`New row in ${shotsLeft} shot${shotsLeft === 1 ? '' : 's'}`, W / 2, H - 8);
   ctx.textAlign = 'left';
 
-  // Overlays
+  // Toast and overlays
+  drawWijntje();
   if (winner)   drawOverlay('You Win!',  '#f1c40f', `Score: ${score}`, 'Click or Space to play again');
   if (gameOver) drawOverlay('Game Over', '#e74c3c', `Score: ${score}`, 'Click or Space to restart');
 }
