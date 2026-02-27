@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Bubble Shooter</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0f0f23;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: sans-serif;
+    }
+    canvas { border: 2px solid #2a2a4a; border-radius: 6px; cursor: crosshair; }
+    p { color: rgba(255,255,255,.35); font-size: 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<p>Move mouse to aim &bull; Click or Space to shoot</p>
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+const W = 400, H = 600;
+canvas.width  = W;
+canvas.height = H;
+
+const R      = 20;                    // bubble radius
+const COLS   = 10;                    // bubbles per even row
+const ROW_H  = R * Math.sqrt(3);     // vertical spacing between row centres
+const MAX_R  = 18;                    // grid row cap
+const SPEED  = 9;
+const COLORS = ['#e74c3c','#3498db','#2ecc71','#f1c40f','#9b59b6','#e67e22'];
+
+// ── grid helpers ──────────────────────────────────────────────────────────────
+
+function colCount(r) { return r % 2 === 0 ? COLS : COLS - 1; }
+
+function cellXY(r, c) {
+  return {
+    x: c * R * 2 + (r % 2 ? R : 0) + R,
+    y: r * ROW_H + R,
+  };
+}
+
+function neighbors(r, c) {
+  const e = r % 2 === 0;
+  return [
+    [r,   c - 1],
+    [r,   c + 1],
+    [r-1, e ? c-1 : c  ],
+    [r-1, e ? c   : c+1],
+    [r+1, e ? c-1 : c  ],
+    [r+1, e ? c   : c+1],
+  ].filter(([nr, nc]) =>
+    nr >= 0 && nr < MAX_R && nc >= 0 && nc < colCount(nr)
+  );
+}
+
+// ── state ────────────────────────────────────────────────────────────────────
+
+let grid, score, gameOver, flying, shooter;
+
+function rndColor() { return COLORS[Math.random() * COLORS.length | 0]; }
+
+function init() {
+  grid = Array.from({ length: MAX_R }, (_, r) => new Array(colCount(r)).fill(null));
+  for (let r = 0; r < 6; r++)
+    for (let c = 0; c < colCount(r); c++)
+      grid[r][c] = rndColor();
+
+  score    = 0;
+  gameOver = false;
+  flying   = null;
+  shooter  = { x: W / 2, y: H - 50, angle: -Math.PI / 2, color: rndColor(), next: rndColor() };
+}
+
+// ── match & drop ─────────────────────────────────────────────────────────────
+
+function flood(r, c, col, seen) {
+  const k = `${r},${c}`;
+  if (seen.has(k) || grid[r]?.[c] !== col) return [];
+  seen.add(k);
+  return [[r, c], ...neighbors(r, c).flatMap(([nr, nc]) => flood(nr, nc, col, seen))];
+}
+
+// BFS from row-0 bubbles to find everything connected to the ceiling
+function connectedToTop() {
+  const seen = new Set();
+  const q = [];
+  for (let c = 0; c < colCount(0); c++)
+    if (grid[0][c]) { seen.add(`0,${c}`); q.push([0, c]); }
+  while (q.length) {
+    const [r, c] = q.shift();
+    for (const [nr, nc] of neighbors(r, c)) {
+      const k = `${nr},${nc}`;
+      if (!seen.has(k) && grid[nr][nc]) { seen.add(k); q.push([nr, nc]); }
+    }
+  }
+  return seen;
+}
+
+function attach(px, py, col) {
+  // Snap to nearest empty cell
+  let best, bestD = Infinity;
+  for (let r = 0; r < MAX_R; r++)
+    for (let c = 0; c < colCount(r); c++) {
+      if (grid[r][c]) continue;
+      const { x, y } = cellXY(r, c);
+      const d = Math.hypot(px - x, py - y);
+      if (d < bestD) { bestD = d; best = [r, c]; }
+    }
+  if (!best) return 0;
+
+  const [r, c] = best;
+  grid[r][c] = col;
+
+  // Pop group of 3+
+  let pts = 0;
+  const group = flood(r, c, col, new Set());
+  if (group.length >= 3) {
+    for (const [gr, gc] of group) grid[gr][gc] = null;
+    pts += group.length;
+
+    // Drop bubbles no longer connected to ceiling
+    const conn = connectedToTop();
+    for (let rr = 0; rr < MAX_R; rr++)
+      for (let cc = 0; cc < colCount(rr); cc++)
+        if (grid[rr][cc] && !conn.has(`${rr},${cc}`)) { grid[rr][cc] = null; pts++; }
+  }
+
+  // Game-over: bubble reached the shooter area
+  const limitY = H - 95;
+  outer:
+  for (let rr = 0; rr < MAX_R; rr++)
+    for (let cc = 0; cc < colCount(rr); cc++)
+      if (grid[rr][cc] && cellXY(rr, cc).y > limitY) { gameOver = true; break outer; }
+
+  return pts;
+}
+
+// ── shoot ────────────────────────────────────────────────────────────────────
+
+function shoot() {
+  if (flying || gameOver) return;
+  flying = {
+    x: shooter.x, y: shooter.y,
+    vx: Math.cos(shooter.angle) * SPEED,
+    vy: Math.sin(shooter.angle) * SPEED,
+    color: shooter.color,
+  };
+  shooter.color = shooter.next;
+  shooter.next  = rndColor();
+}
+
+function update() {
+  if (!flying) return;
+  flying.x += flying.vx;
+  flying.y += flying.vy;
+
+  // Bounce off side walls
+  if (flying.x - R < 0) { flying.x = R;     flying.vx =  Math.abs(flying.vx); }
+  if (flying.x + R > W) { flying.x = W - R; flying.vx = -Math.abs(flying.vx); }
+
+  // Hit ceiling
+  if (flying.y - R <= 0) {
+    score += attach(flying.x, R, flying.color) * 10;
+    flying = null;
+    return;
+  }
+
+  // Collide with a grid bubble
+  for (let r = 0; r < MAX_R; r++)
+    for (let c = 0; c < colCount(r); c++) {
+      if (!grid[r][c]) continue;
+      const { x, y } = cellXY(r, c);
+      if (Math.hypot(flying.x - x, flying.y - y) < R * 2 - 1) {
+        score += attach(flying.x, flying.y, flying.color) * 10;
+        flying = null;
+        return;
+      }
+    }
+}
+
+// ── render ───────────────────────────────────────────────────────────────────
+
+function drawBubble(x, y, col, r = R) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = col;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.18)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Glossy sheen
+  const g = ctx.createRadialGradient(x - r * .32, y - r * .35, r * .05, x, y, r);
+  g.addColorStop(0,   'rgba(255,255,255,.48)');
+  g.addColorStop(.5,  'rgba(255,255,255,0)');
+  g.addColorStop(1,   'rgba(0,0,0,.20)');
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = g;
+  ctx.fill();
+}
+
+function drawAimGuide() {
+  let x = shooter.x, y = shooter.y;
+  let vx = Math.cos(shooter.angle), vy = Math.sin(shooter.angle);
+  let rem = 240;
+
+  ctx.save();
+  ctx.setLineDash([6, 10]);
+  ctx.strokeStyle = 'rgba(255,255,255,.28)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+
+  while (rem > 0) {
+    const tL = vx < 0 ? (R - x) / vx : Infinity;
+    const tR = vx > 0 ? (W - R - x) / vx : Infinity;
+    const t  = Math.min(tL, tR, rem);
+    x += vx * t;
+    y += vy * t;
+    ctx.lineTo(x, y);
+    if (t < rem) vx = -vx;
+    rem -= t;
+  }
+
+  ctx.stroke();
+  ctx.restore();
+}
+
+function draw() {
+  // Background
+  ctx.fillStyle = '#16213e';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid bubbles
+  for (let r = 0; r < MAX_R; r++)
+    for (let c = 0; c < colCount(r); c++)
+      if (grid[r][c]) { const { x, y } = cellXY(r, c); drawBubble(x, y, grid[r][c]); }
+
+  // Flying bubble
+  if (flying) drawBubble(flying.x, flying.y, flying.color);
+
+  // Aim guide
+  if (!gameOver) drawAimGuide();
+
+  // Shooter panel divider
+  ctx.strokeStyle = 'rgba(255,255,255,.07)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, H - 90); ctx.lineTo(W, H - 90); ctx.stroke();
+
+  // Current bubble in shooter
+  drawBubble(shooter.x, shooter.y, shooter.color);
+
+  // Next bubble
+  ctx.fillStyle = 'rgba(255,255,255,.45)';
+  ctx.font = '11px sans-serif';
+  ctx.fillText('NEXT', 20, H - 63);
+  drawBubble(42, H - 40, shooter.next, R * .65);
+
+  // Score
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(`Score: ${score}`, W - 12, H - 10);
+  ctx.textAlign = 'left';
+
+  // Game-over overlay
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(0,0,0,.7)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 38px sans-serif';
+    ctx.fillText('Game Over', W / 2, H / 2 - 24);
+    ctx.font = '20px sans-serif';
+    ctx.fillText(`Score: ${score}`, W / 2, H / 2 + 18);
+    ctx.font = '13px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,.55)';
+    ctx.fillText('Click or press Space to restart', W / 2, H / 2 + 52);
+    ctx.textAlign = 'left';
+  }
+}
+
+// ── input ────────────────────────────────────────────────────────────────────
+
+function setAngle(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const dx = clientX - rect.left - shooter.x;
+  const dy = clientY - rect.top  - shooter.y;
+  shooter.angle = Math.max(-Math.PI + .15, Math.min(-.15, Math.atan2(dy, dx)));
+}
+
+canvas.addEventListener('mousemove', e => setAngle(e.clientX, e.clientY));
+
+canvas.addEventListener('click', () => {
+  if (gameOver) { init(); return; }
+  shoot();
+});
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  setAngle(e.touches[0].clientX, e.touches[0].clientY);
+}, { passive: false });
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (gameOver) { init(); return; }
+  shoot();
+}, { passive: false });
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (gameOver) init(); else shoot();
+  }
+});
+
+// ── run ──────────────────────────────────────────────────────────────────────
+
+init();
+(function loop() { update(); draw(); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>
