@@ -10,9 +10,9 @@ const CONFIG = {
   FILL_ROWS:  6,  // rows pre-filled with random bubbles at game start
 
   // ── Gameplay ────────────────────────────────────────────────────────────────
-  BUBBLE_SPEED:      9,   // flying-bubble speed in px/frame
+  BUBBLE_SPEED:      24,   // flying-bubble speed in px/frame
   MATCH_COUNT:       3,   // minimum connected group size to pop
-  SHOTS_PER_NEW_ROW: 10,  // every Nth shot → push a fresh row from the top
+  SHOTS_PER_NEW_ROW: 20,  // every Nth shot → push a fresh row from the top
   POINTS_PER_BUBBLE: 10,  // score awarded per bubble cleared
 
   // ── Aim guide ───────────────────────────────────────────────────────────────
