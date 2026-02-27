@@ -17,7 +17,7 @@ const CONFIG = {
 
   // ── Head bubble (special type; renders as a face image instead of a colour) ─
   HEAD_ID:        'head',       // internal identifier – treated like a colour for all game logic
-  HEAD_IMAGE_SRC: 'piet.jpg',   // path to the head photo (place the file next to index.html)
+  HEAD_IMAGE_SRC: 'sinterklaas.png',   // path to the head photo (place the file next to index.html)
 
   // ── Aim guide ───────────────────────────────────────────────────────────────
   AIM_GUIDE_LENGTH:      300,  // baseline dashed-line length (px)
