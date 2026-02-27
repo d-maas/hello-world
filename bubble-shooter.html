@@ -28,7 +28,7 @@ const {
   R, COLS, MAX_ROWS, FILL_ROWS,
   BUBBLE_SPEED, MATCH_COUNT, SHOTS_PER_NEW_ROW, POINTS_PER_BUBBLE,
   AIM_GUIDE_LENGTH, AIM_GUIDE_POST_BOUNCE,
-  HEAD_ID, HEAD_CHANCE, HEAD_IMAGE_SRC,
+  HEAD_ID, HEAD_IMAGE_SRC,
   WIJNTJE_TEXT, WIJNTJE_MIN_POP, WIJNTJE_DURATION,
   COLORS,
 } = CONFIG;
@@ -79,9 +79,7 @@ let grid, score, shotsFired, pendingNewRow, availableColors, gameOver, winner, f
     wijntjeTimer, wijntjeStart;
 
 // Always draw from the shrinking pool of colors still in play.
-// HEAD_ID is excluded from availableColors and handled via HEAD_CHANCE instead.
 function rndColor() {
-  if (Math.random() < HEAD_CHANCE) return HEAD_ID;
   return availableColors[Math.random() * availableColors.length | 0];
 }
 
@@ -99,7 +97,7 @@ function pruneColors() {
 }
 
 function init() {
-  availableColors = [...COLORS];   // full palette; shrinks as colours are cleared
+  availableColors = [...COLORS, HEAD_ID];  // full palette incl. head; shrinks as types are cleared
   grid            = Array.from({ length: MAX_ROWS }, (_, r) => new Array(colCount(r)).fill(null));
   score           = 0;
   shotsFired      = 0;
