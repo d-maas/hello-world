@@ -36,7 +36,7 @@ const {
   R, COLS, MAX_ROWS, FILL_ROWS,
   BUBBLE_SPEED, MATCH_COUNT, SHOTS_PER_NEW_ROW, POINTS_PER_BUBBLE,
   AIM_GUIDE_LENGTH, AIM_GUIDE_POST_BOUNCE,
-  HEAD_ID, HEAD_IMAGE_SRC,
+  HEAD_ID, HEAD_IMAGE_SRC, HEAD2_ID, HEAD2_IMAGE_SRC,
   WIJNTJE_TEXT, WIJNTJE_MIN_POP, WIJNTJE_DURATION,
   COLORS,
 } = CONFIG;
@@ -60,11 +60,15 @@ function fitCanvas() {
 window.addEventListener('resize', fitCanvas);
 fitCanvas();
 
-// ── Head bubble image ─────────────────────────────────────────────────────────
-// Drop any photo as HEAD_IMAGE_SRC (config.js) next to this file.
-// While the image is loading (or missing) the bubble shows a plain skin-tone fill.
-const HEAD_IMG = new Image();
-HEAD_IMG.src = HEAD_IMAGE_SRC;
+// ── Head bubble images ────────────────────────────────────────────────────────
+// HEAD_IMGS maps each head ID to its Image object.
+// Any ID present here is drawn as a photo bubble instead of a colour bubble.
+// While an image is loading (or the file is missing) the bubble shows a plain fill.
+function loadImg(src) { const i = new Image(); i.src = src; return i; }
+const HEAD_IMGS = {
+  [HEAD_ID]:  loadImg(HEAD_IMAGE_SRC),
+  [HEAD2_ID]: loadImg(HEAD2_IMAGE_SRC),
+};
 
 // ── Grid helpers ──────────────────────────────────────────────────────────────
 
@@ -115,7 +119,7 @@ function pruneColors() {
 }
 
 function init() {
-  availableColors = [...COLORS, HEAD_ID];  // full palette incl. head; shrinks as types are cleared
+  availableColors = [...COLORS, HEAD_ID, HEAD2_ID];  // full palette incl. both heads; shrinks as types are cleared
   grid            = Array.from({ length: MAX_ROWS }, (_, r) => new Array(colCount(r)).fill(null));
   score           = 0;
   shotsFired      = 0;
@@ -312,16 +316,16 @@ function update() {
 
 function drawBubble(x, y, col, r = R) {
   // Base fill
+  const headImg = HEAD_IMGS[col];
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
-  if (col === HEAD_ID) {
-    ctx.fillStyle = '#fad5a5';   // skin-tone background for the face
+  if (headImg) {
+    ctx.fillStyle = '#fad5a5';   // skin-tone background shown while image loads
     ctx.fill();
-    // Draw SVG face clipped to the bubble circle (path is still active after fill)
-    if (HEAD_IMG.complete && HEAD_IMG.naturalWidth > 0) {
+    if (headImg.complete && headImg.naturalWidth > 0) {
       ctx.save();
-      ctx.clip();
-      ctx.drawImage(HEAD_IMG, x - r, y - r, r * 2, r * 2);
+      ctx.clip();   // path still active after fill(); clip to the circle
+      ctx.drawImage(headImg, x - r, y - r, r * 2, r * 2);
       ctx.restore();
     }
   } else {
@@ -330,7 +334,7 @@ function drawBubble(x, y, col, r = R) {
   }
 
   // Outline
-  ctx.strokeStyle = col === HEAD_ID ? 'rgba(180,120,60,.5)' : 'rgba(255,255,255,.18)';
+  ctx.strokeStyle = headImg ? 'rgba(180,120,60,.5)' : 'rgba(255,255,255,.18)';
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
