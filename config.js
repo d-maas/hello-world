@@ -19,7 +19,7 @@ const CONFIG = {
   HEAD_ID:         'michel',    // identifier for the first head bubble
   HEAD_IMAGE_SRC:  'michel.png',
   HEAD2_ID:        'lizeth',           // identifier for the second head bubble
-  HEAD2_IMAGE_SRC: 'lizeth.jpg',
+  HEAD2_IMAGE_SRC: 'lizeth.png',
 
   // ── Aim guide ───────────────────────────────────────────────────────────────
   AIM_GUIDE_LENGTH:      300,  // baseline dashed-line length (px)
