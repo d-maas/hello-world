@@ -16,10 +16,10 @@ const CONFIG = {
   POINTS_PER_BUBBLE: 10,  // score awarded per bubble cleared
 
   // ── Head bubbles (special types; render as face images instead of colours) ───
-  HEAD_ID:         'sinterklaas',    // identifier for the first head bubble
-  HEAD_IMAGE_SRC:  'sinterklaas.png',
-  HEAD2_ID:        'piet',           // identifier for the second head bubble
-  HEAD2_IMAGE_SRC: 'piet.jpg',
+  HEAD_ID:         'michel',    // identifier for the first head bubble
+  HEAD_IMAGE_SRC:  'michel.png',
+  HEAD2_ID:        'lizeth',           // identifier for the second head bubble
+  HEAD2_IMAGE_SRC: 'lizeth.jpg',
 
   // ── Aim guide ───────────────────────────────────────────────────────────────
   AIM_GUIDE_LENGTH:      300,  // baseline dashed-line length (px)
