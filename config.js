@@ -15,9 +15,11 @@ const CONFIG = {
   SHOTS_PER_NEW_ROW: 20,  // every Nth shot → push a fresh row from the top
   POINTS_PER_BUBBLE: 10,  // score awarded per bubble cleared
 
-  // ── Head bubble (special type; renders as a face image instead of a colour) ─
-  HEAD_ID:        'head',       // internal identifier – treated like a colour for all game logic
-  HEAD_IMAGE_SRC: 'sinterklaas.png',   // path to the head photo (place the file next to index.html)
+  // ── Head bubbles (special types; render as face images instead of colours) ───
+  HEAD_ID:         'sinterklaas',    // identifier for the first head bubble
+  HEAD_IMAGE_SRC:  'sinterklaas.png',
+  HEAD2_ID:        'piet',           // identifier for the second head bubble
+  HEAD2_IMAGE_SRC: 'piet.jpg',
 
   // ── Aim guide ───────────────────────────────────────────────────────────────
   AIM_GUIDE_LENGTH:      300,  // baseline dashed-line length (px)
