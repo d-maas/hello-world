@@ -3,548 +3,784 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-  <title>Bubble Shooter</title>
+  <title>GDP Guardian</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      background: #0f0f23;
+      background: #0d1b2a;
       display: flex;
+      flex-direction: column;
       justify-content: center;
       align-items: center;
-      height: 100vh;
-      height: 100dvh;      /* mobile: excludes collapsing address-bar */
-      overflow: hidden;
-      font-family: sans-serif;
+      min-height: 100vh;
+      font-family: 'Segoe UI', sans-serif;
     }
     canvas {
-      border: 2px solid #2a2a4a;
-      border-radius: 6px;
-      cursor: crosshair;
-      touch-action: none;                /* let JS own all touch events */
-      -webkit-tap-highlight-color: transparent;
+      display: block;
+      border: 2px solid #3a86ff;
+      border-radius: 8px;
+      touch-action: none;
       user-select: none;
       -webkit-user-select: none;
     }
   </style>
 </head>
 <body>
-<canvas id="c"></canvas>
-<script src="config.js"></script>
+<canvas id="game"></canvas>
 <script>
-// ── Unpack config ─────────────────────────────────────────────────────────────
-const {
-  R, COLS, MAX_ROWS, FILL_ROWS,
-  BUBBLE_SPEED, MATCH_COUNT, SHOTS_PER_NEW_ROW, POINTS_PER_BUBBLE,
-  AIM_GUIDE_LENGTH, AIM_GUIDE_POST_BOUNCE,
-  HEAD_ID, HEAD_IMAGE_SRC, HEAD2_ID, HEAD2_IMAGE_SRC,
-  WIJNTJE_TEXT, WIJNTJE_MIN_POP, WIJNTJE_DURATION,
-  COLORS,
-} = CONFIG;
-
-const ROW_H = R * Math.sqrt(3);   // vertical distance between row centres
-
-// ── Canvas ────────────────────────────────────────────────────────────────────
-const canvas = document.getElementById('c');
+// ─── GDP GUARDIAN ─── Good Distribution Practices Training Game ───────────────
+const canvas = document.getElementById('game');
 const ctx    = canvas.getContext('2d');
-const W = 400, H = 600;
-canvas.width  = W;
-canvas.height = H;
+const W = 800, H = 530;
+canvas.width = W; canvas.height = H;
 
-// Scale the canvas display size to fill the viewport while keeping aspect ratio.
-// The internal resolution (W×H) never changes, so all game logic is unaffected.
 function fitCanvas() {
-  const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
-  canvas.style.width  = Math.round(W * scale) + 'px';
-  canvas.style.height = Math.round(H * scale) + 'px';
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H, 1);
+  canvas.style.width  = Math.round(W * s) + 'px';
+  canvas.style.height = Math.round(H * s) + 'px';
 }
 window.addEventListener('resize', fitCanvas);
 fitCanvas();
 
-// ── Head bubble images ────────────────────────────────────────────────────────
-// HEAD_IMGS maps each head ID to its Image object.
-// Any ID present here is drawn as a photo bubble instead of a colour bubble.
-// While an image is loading (or the file is missing) the bubble shows a plain fill.
-function loadImg(src) { const i = new Image(); i.src = src; return i; }
-const HEAD_IMGS = {
-  [HEAD_ID]:  loadImg(HEAD_IMAGE_SRC),
-  [HEAD2_ID]: loadImg(HEAD2_IMAGE_SRC),
-};
+// ─── Constants ────────────────────────────────────────────────────────────────
+const GRAVITY    = 0.55;
+const JUMP_FORCE = -12;
+const MOVE_SPEED = 4;
+const GY         = 465; // ground surface Y
 
-// ── Grid helpers ──────────────────────────────────────────────────────────────
+// ─── Input ────────────────────────────────────────────────────────────────────
+const keys = {};
+document.addEventListener('keydown', e => { keys[e.code] = true; });
+document.addEventListener('keyup',   e => { keys[e.code] = false; });
 
-function colCount(r) { return r % 2 === 0 ? COLS : COLS - 1; }
+const touch = { left: false, right: false, jump: false };
 
-function cellXY(r, c) {
-  return {
-    x: c * R * 2 + (r % 2 ? R : 0) + R,
-    y: r * ROW_H + R,
-  };
+// ─── State ────────────────────────────────────────────────────────────────────
+let state   = 'title';   // title | playing | levelComplete | gameOver | win
+let lvIdx   = 0;
+let lives   = 3;
+let score   = 0;
+let collected = 0;
+let needed    = 0;
+let frame     = 0;
+let msgTimer  = 0;   // countdown after level/game over screen shown
+let msgText   = '';
+
+// ─── Player ───────────────────────────────────────────────────────────────────
+const P = { x:0, y:0, vx:0, vy:0, w:22, h:36, onGround:false, inv:0, right:true };
+
+function resetPlayer(sx, sy) {
+  P.x = sx; P.y = sy; P.vx = 0; P.vy = 0; P.onGround = false; P.inv = 0;
 }
 
-function neighbors(r, c) {
-  const e = r % 2 === 0;
-  return [
-    [r,   c - 1],
-    [r,   c + 1],
-    [r-1, e ? c-1 : c  ],
-    [r-1, e ? c   : c+1],
-    [r+1, e ? c-1 : c  ],
-    [r+1, e ? c   : c+1],
-  ].filter(([nr, nc]) =>
-    nr >= 0 && nr < MAX_ROWS && nc >= 0 && nc < colCount(nr)
-  );
+// ─── Levels ───────────────────────────────────────────────────────────────────
+function mkItem(type, x, y) {
+  const good = !['expired','wrong_temp','damaged','temp_exc','unsigned'].includes(type);
+  return { type, x, y, collected: false, good };
 }
 
-// ── State ─────────────────────────────────────────────────────────────────────
+const LEVELS = [
+  {
+    name: 'Level 1: The Warehouse',
+    hint: 'Collect temperature logs & properly labelled boxes. Avoid GDP violations!',
+    bgColor: ['#101c2c','#1a2d3f'],
+    fgColor: '#7a5a3a',
+    platforms: [
+      { x:0,   y:GY,  w:W,   h:65 },   // ground
+      { x:100, y:420, w:120, h:14 },
+      { x:280, y:360, w:120, h:14 },
+      { x:460, y:300, w:120, h:14 },
+      { x:600, y:240, w:150, h:14 },
+      { x:350, y:188, w:160, h:14 },
+      { x:80,  y:138, w:160, h:14 },
+      { x:550, y:98,  w:200, h:14 },
+    ],
+    items: [
+      // collectibles
+      mkItem('temp_log', 130, 396),
+      mkItem('temp_log',  50, 441),
+      mkItem('temp_log', 300, 336),
+      mkItem('label',    480, 276),
+      mkItem('temp_log', 640, 216),
+      mkItem('label',    390, 164),
+      mkItem('label',    100, 114),
+      mkItem('temp_log', 580,  74),
+      // hazards
+      mkItem('expired',    200, 441),
+      mkItem('wrong_temp', 360, 441),
+      mkItem('expired',    520, 441),
+      mkItem('wrong_temp', 680, 441),
+      mkItem('expired',    510, 276),
+      mkItem('wrong_temp', 460, 164),
+    ],
+    needed: 8,
+    start: { x:40, y:425 },
+    exit:  { x:715, y:43, w:55, h:55 },
+    tip: {
+      title: 'GDP: Temperature Control & Storage',
+      lines: [
+        'Always record and monitor storage temperatures.',
+        'Follow FEFO — First Expired, First Out.',
+        'Never mix expired stock with compliant goods.',
+        'Store every product within its labelled temperature range.',
+      ],
+    },
+  },
+  {
+    name: 'Level 2: The Distribution Route',
+    hint: 'Collect delivery notes & cold packs. Report damages and temp excursions!',
+    bgColor: ['#0e1e0e','#162614'],
+    fgColor: '#3a6a3a',
+    platforms: [
+      { x:0,   y:GY,  w:W,   h:65 },
+      { x:80,  y:415, w:130, h:14 },
+      { x:270, y:355, w:130, h:14 },
+      { x:460, y:295, w:130, h:14 },
+      { x:620, y:235, w:150, h:14 },
+      { x:380, y:183, w:160, h:14 },
+      { x:100, y:138, w:150, h:14 },
+      { x:550, y:103, w:200, h:14 },
+    ],
+    items: [
+      // collectibles
+      mkItem('delivery', 110, 391),
+      mkItem('cold_pack',  50, 441),
+      mkItem('delivery',  290, 331),
+      mkItem('cold_pack', 480, 271),
+      mkItem('delivery',  645, 211),
+      mkItem('delivery',  410, 159),
+      mkItem('cold_pack', 120, 114),
+      mkItem('delivery',  570,  79),
+      mkItem('cold_pack', 680,  79),
+      // hazards
+      mkItem('damaged',    190, 441),
+      mkItem('temp_exc',   360, 441),
+      mkItem('unsigned',   530, 441),
+      mkItem('damaged',    670, 441),
+      mkItem('damaged',    510, 271),
+      mkItem('temp_exc',   490, 159),
+    ],
+    needed: 9,
+    start: { x:40, y:425 },
+    exit:  { x:715, y:48, w:55, h:55 },
+    tip: {
+      title: 'GDP: Cold Chain & Documentation',
+      lines: [
+        'Maintain an unbroken cold chain throughout distribution.',
+        'All deliveries require complete, signed documentation.',
+        'Inspect every package for damage before accepting.',
+        'Quarantine and report any temperature excursions immediately.',
+      ],
+    },
+  },
+];
 
-let grid, score, shotsFired, pendingNewRow, availableColors, gameOver, winner, flying, shooter,
-    wijntjeTimer, wijntjeStart;
-
-// Always draw from the shrinking pool of colors still in play.
-function rndColor() {
-  return availableColors[Math.random() * availableColors.length | 0];
+// ─── Load level ───────────────────────────────────────────────────────────────
+function loadLevel(i) {
+  lvIdx = i;
+  const lv = LEVELS[i];
+  lv.items.forEach(it => { it.collected = false; });
+  collected = 0;
+  needed    = lv.needed;
+  resetPlayer(lv.start.x, lv.start.y);
+  state = 'playing';
 }
 
-// After any grid change, drop colors that no longer exist anywhere.
-// A color survives if it is still in the grid, the cannon, or the next slot.
-function pruneColors() {
-  const inPlay = new Set();
-  for (let r = 0; r < MAX_ROWS; r++)
-    for (let c = 0; c < colCount(r); c++)
-      if (grid[r][c]) inPlay.add(grid[r][c]);
-  inPlay.add(shooter.color);
-  inPlay.add(shooter.next);
-  if (flying) inPlay.add(flying.color);
-  availableColors = availableColors.filter(col => inPlay.has(col));
+function startGame() {
+  lives = 3; score = 0;
+  loadLevel(0);
 }
 
-function init() {
-  availableColors = [...COLORS, HEAD_ID, HEAD2_ID];  // full palette incl. both heads; shrinks as types are cleared
-  grid            = Array.from({ length: MAX_ROWS }, (_, r) => new Array(colCount(r)).fill(null));
-  score           = 0;
-  shotsFired      = 0;
-  pendingNewRow   = false;
-  wijntjeTimer    = 0;
-  wijntjeStart    = 0;
-  gameOver        = false;
-  winner          = false;
-  flying          = null;
-  shooter         = { x: W / 2, y: H - 50, angle: -Math.PI / 2, color: rndColor(), next: rndColor() };
-
-  for (let r = 0; r < FILL_ROWS; r++)
-    for (let c = 0; c < colCount(r); c++)
-      grid[r][c] = rndColor();
+// ─── Collision ────────────────────────────────────────────────────────────────
+function overlap(ax,ay,aw,ah, bx,by,bw,bh) {
+  return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
 }
 
-// ── Match & drop ──────────────────────────────────────────────────────────────
-
-function flood(r, c, col, seen) {
-  const k = `${r},${c}`;
-  if (seen.has(k) || grid[r]?.[c] !== col) return [];
-  seen.add(k);
-  return [[r, c], ...neighbors(r, c).flatMap(([nr, nc]) => flood(nr, nc, col, seen))];
-}
-
-function connectedToTop() {
-  const seen = new Set();
-  const q = [];
-  for (let c = 0; c < colCount(0); c++)
-    if (grid[0][c]) { seen.add(`0,${c}`); q.push([0, c]); }
-  while (q.length) {
-    const [r, c] = q.shift();
-    for (const [nr, nc] of neighbors(r, c)) {
-      const k = `${nr},${nc}`;
-      if (!seen.has(k) && grid[nr][nc]) { seen.add(k); q.push([nr, nc]); }
-    }
+function resolvePlatforms(plats) {
+  P.onGround = false;
+  for (const pl of plats) {
+    if (!overlap(P.x,P.y,P.w,P.h, pl.x,pl.y,pl.w,pl.h)) continue;
+    const oL = (P.x+P.w) - pl.x;
+    const oR = (pl.x+pl.w) - P.x;
+    const oT = (P.y+P.h) - pl.y;
+    const oB = (pl.y+pl.h) - P.y;
+    const m  = Math.min(oL,oR,oT,oB);
+    if (m === oT && P.vy >= 0) { P.y = pl.y - P.h; P.vy = 0; P.onGround = true; }
+    else if (m === oB && P.vy < 0) { P.y = pl.y + pl.h; P.vy = 0; }
+    else if (m === oL) { P.x = pl.x - P.w; P.vx = 0; }
+    else if (m === oR) { P.x = pl.x + pl.w; P.vx = 0; }
   }
-  return seen;
 }
 
-function checkGameOver() {
-  const limitY = H - 95;
-  for (let r = 0; r < MAX_ROWS; r++)
-    for (let c = 0; c < colCount(r); c++)
-      if (grid[r][c] && cellXY(r, c).y > limitY) return true;
-  return false;
-}
-
-function checkWinner() {
-  for (let r = 0; r < MAX_ROWS; r++)
-    for (let c = 0; c < colCount(r); c++)
-      if (grid[r][c]) return false;
-  return true;
-}
-
-function attach(px, py, col) {
-  // Snap to nearest empty cell
-  let best, bestD = Infinity;
-  for (let r = 0; r < MAX_ROWS; r++)
-    for (let c = 0; c < colCount(r); c++) {
-      if (grid[r][c]) continue;
-      const { x, y } = cellXY(r, c);
-      const d = Math.hypot(px - x, py - y);
-      if (d < bestD) { bestD = d; best = [r, c]; }
-    }
-  if (!best) return 0;
-
-  const [r, c] = best;
-  grid[r][c] = col;
-
-  // Pop group of MATCH_COUNT+
-  let pts = 0;
-  const group = flood(r, c, col, new Set());
-  if (group.length >= MATCH_COUNT) {
-    for (const [gr, gc] of group) grid[gr][gc] = null;
-    pts += group.length;
-    // Drop bubbles no longer connected to ceiling
-    const conn = connectedToTop();
-    for (let rr = 0; rr < MAX_ROWS; rr++)
-      for (let cc = 0; cc < colCount(rr); cc++)
-        if (grid[rr][cc] && !conn.has(`${rr},${cc}`)) { grid[rr][cc] = null; pts++; }
-    // Big-pop toast
-    if (group.length >= WIJNTJE_MIN_POP) {
-      wijntjeStart = Date.now();
-      wijntjeTimer = wijntjeStart + WIJNTJE_DURATION;
-    }
-  }
-
-  // Prune eliminated colours after pops/drops, then add a new row if this
-  // shot was the one that triggered the threshold (timing fix: we do it here,
-  // AFTER the bubble has already landed and resolved, not at fire-time).
-  pruneColors();
-  if (pendingNewRow) {
-    pendingNewRow = false;
-    addNewRow();   // addNewRow uses rndColor() → respects pruned palette
-    pruneColors(); // new row may contain only surviving colours; re-check
-  }
-
-  if (!gameOver && checkGameOver()) gameOver = true;
-  if (!gameOver && !winner && checkWinner()) winner = true;
-
-  return pts;
-}
-
-// ── New row from top ──────────────────────────────────────────────────────────
-
-function addNewRow() {
-  // Shift every row down by one, adapting even/odd column counts
-  for (let r = MAX_ROWS - 1; r >= 1; r--) {
-    const newCols = colCount(r);
-    const oldCols = colCount(r - 1);
-    const row = new Array(newCols).fill(null);
-    for (let c = 0; c < Math.min(newCols, oldCols); c++)
-      row[c] = grid[r - 1][c];
-    grid[r] = row;
-  }
-  // Fresh row at the top
-  grid[0] = Array.from({ length: colCount(0) }, () => rndColor());
-  if (checkGameOver()) gameOver = true;
-}
-
-// ── Audio ─────────────────────────────────────────────────────────────────────
-
-let audioCtx = null;
-
-function playShootSound() {
-  try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc  = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.type = 'sine';
-    const t = audioCtx.currentTime;
-    osc.frequency.setValueAtTime(520, t);
-    osc.frequency.exponentialRampToValueAtTime(130, t + 0.12);
-    gain.gain.setValueAtTime(0.22, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
-    osc.start(t);
-    osc.stop(t + 0.12);
-  } catch (_) { /* audio unavailable */ }
-}
-
-// ── Shoot ─────────────────────────────────────────────────────────────────────
-
-function shoot() {
-  if (flying || gameOver || winner) return;
-  flying = {
-    x: shooter.x, y: shooter.y,
-    vx: Math.cos(shooter.angle) * BUBBLE_SPEED,
-    vy: Math.sin(shooter.angle) * BUBBLE_SPEED,
-    color: shooter.color,
-  };
-  shooter.color = shooter.next;
-  shooter.next  = rndColor();
-  playShootSound();
-
-  shotsFired++;
-  if (shotsFired % SHOTS_PER_NEW_ROW === 0) pendingNewRow = true;
-}
-
-// ── Update ────────────────────────────────────────────────────────────────────
-
+// ─── Update ───────────────────────────────────────────────────────────────────
 function update() {
-  if (!flying) return;
-  flying.x += flying.vx;
-  flying.y += flying.vy;
+  frame++;
+  if (state !== 'playing') return;
 
-  // Bounce off side walls
-  if (flying.x - R < 0) { flying.x = R;     flying.vx =  Math.abs(flying.vx); }
-  if (flying.x + R > W) { flying.x = W - R; flying.vx = -Math.abs(flying.vx); }
+  const lv = LEVELS[lvIdx];
+  const left  = keys['ArrowLeft']  || keys['KeyA'] || touch.left;
+  const right = keys['ArrowRight'] || keys['KeyD'] || touch.right;
+  const jump  = keys['ArrowUp']    || keys['KeyW'] || keys['Space'] || touch.jump;
 
-  // Hit ceiling
-  if (flying.y - R <= 0) {
-    score += attach(flying.x, R, flying.color) * POINTS_PER_BUBBLE;
-    flying = null;
-    return;
+  if (left)  { P.vx = -MOVE_SPEED; P.right = false; }
+  if (right) { P.vx =  MOVE_SPEED; P.right = true;  }
+  if (!left && !right) P.vx *= 0.75;
+
+  if (jump && P.onGround) P.vy = JUMP_FORCE;
+
+  P.vy = Math.min(P.vy + GRAVITY, 18);
+  P.x += P.vx;
+  P.y += P.vy;
+
+  if (P.x < 0)       { P.x = 0;      P.vx = 0; }
+  if (P.x+P.w > W)   { P.x = W-P.w;  P.vx = 0; }
+
+  resolvePlatforms(lv.platforms);
+
+  // Fell out of world
+  if (P.y > H + 80) loseLife();
+
+  if (P.inv > 0) P.inv--;
+
+  // Item collisions
+  for (const it of lv.items) {
+    if (it.collected) continue;
+    if (!overlap(P.x,P.y,P.w,P.h, it.x,it.y,20,20)) continue;
+    if (it.good) {
+      it.collected = true;
+      collected++;
+      score += 100;
+    } else {
+      loseLife();
+    }
   }
 
-  // Collide with a grid bubble
-  for (let r = 0; r < MAX_ROWS; r++)
-    for (let c = 0; c < colCount(r); c++) {
-      if (!grid[r][c]) continue;
-      const { x, y } = cellXY(r, c);
-      if (Math.hypot(flying.x - x, flying.y - y) < R * 2 - 1) {
-        score += attach(flying.x, flying.y, flying.color) * POINTS_PER_BUBBLE;
-        flying = null;
-        return;
+  // Exit
+  const ex = lv.exit;
+  if (collected >= needed && overlap(P.x,P.y,P.w,P.h, ex.x,ex.y,ex.w,ex.h)) {
+    score += 500 + lives * 200;
+    state = 'levelComplete';
+  }
+}
+
+function loseLife() {
+  if (P.inv > 0) return;
+  lives--;
+  P.inv = 100;
+  if (lives <= 0) state = 'gameOver';
+  else resetPlayer(LEVELS[lvIdx].start.x, LEVELS[lvIdx].start.y);
+}
+
+// ─── Draw helpers ─────────────────────────────────────────────────────────────
+function roundRect(x,y,w,h,r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x,y,w,h,r);
+  else ctx.rect(x,y,w,h);
+}
+
+function drawItem(it) {
+  if (it.collected) return;
+  const bob = Math.sin(frame*0.05 + it.x*0.1) * 3;
+  const cx = it.x + 10, cy = it.y + 10 - bob;
+  ctx.save();
+  switch (it.type) {
+    case 'temp_log': {
+      ctx.fillStyle = '#2ecc71';
+      ctx.fillRect(cx-4, cy-12, 8, 18);
+      ctx.beginPath(); ctx.arc(cx, cy+8, 6, 0, Math.PI*2);
+      ctx.fillStyle = '#27ae60'; ctx.fill();
+      ctx.fillStyle = '#ff4757';
+      ctx.fillRect(cx-2, cy-4, 4, 12);
+      // glow ring
+      ctx.strokeStyle = 'rgba(46,204,113,0.4)'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.arc(cx, cy, 14, 0, Math.PI*2); ctx.stroke();
+      break;
+    }
+    case 'label': {
+      ctx.fillStyle = '#3498db';
+      ctx.fillRect(cx-10, cy-11, 20, 20);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(cx-7, cy-8, 14, 8);
+      ctx.fillStyle = '#2980b9';
+      ctx.font = '5px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('GDP✓', cx, cy-2);
+      ctx.strokeStyle='#2ecc71'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(cx-3,cy+5); ctx.lineTo(cx,cy+9); ctx.lineTo(cx+5,cy+3); ctx.stroke();
+      break;
+    }
+    case 'delivery': {
+      ctx.fillStyle = '#f5f0e8';
+      ctx.fillRect(cx-10, cy-13, 20, 26);
+      ctx.fillStyle = '#bdc3c7';
+      for (let i=0;i<4;i++) ctx.fillRect(cx-7, cy-9+i*5, 14, 2);
+      ctx.strokeStyle='#2ecc71'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(cx-7,cy+9);
+      ctx.bezierCurveTo(cx-3,cy+6, cx+1,cy+11, cx+7,cy+8); ctx.stroke();
+      break;
+    }
+    case 'cold_pack': {
+      ctx.fillStyle = '#74b9ff';
+      roundRect(cx-11, cy-12, 22, 24, 4); ctx.fill();
+      ctx.fillStyle='#fff'; ctx.font='16px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('❄', cx, cy+6);
+      break;
+    }
+    case 'expired': {
+      ctx.fillStyle = '#c0392b';
+      ctx.fillRect(cx-11, cy-11, 22, 22);
+      ctx.strokeStyle='#ff6b6b'; ctx.lineWidth=2.5;
+      ctx.beginPath(); ctx.moveTo(cx-6,cy-7); ctx.lineTo(cx+6,cy+7);
+      ctx.moveTo(cx+6,cy-7); ctx.lineTo(cx-6,cy+7); ctx.stroke();
+      const p = (Math.sin(frame*0.1)+1)/2;
+      ctx.globalAlpha = 0.25*p; ctx.fillStyle='#ff0000';
+      ctx.fillRect(cx-15,cy-15,30,30); ctx.globalAlpha=1;
+      break;
+    }
+    case 'wrong_temp': {
+      ctx.fillStyle='#f39c12';
+      ctx.beginPath();
+      ctx.moveTo(cx,cy+10);
+      ctx.bezierCurveTo(cx-10,cy+4, cx-8,cy-4, cx-3,cy-10);
+      ctx.bezierCurveTo(cx-5,cy-3, cx-1,cy, cx,cy-5);
+      ctx.bezierCurveTo(cx+1,cy, cx+5,cy-3, cx+3,cy-10);
+      ctx.bezierCurveTo(cx+8,cy-4, cx+10,cy+4, cx,cy+10);
+      ctx.fill();
+      ctx.fillStyle='#e74c3c';
+      ctx.beginPath();
+      ctx.moveTo(cx,cy+8); ctx.bezierCurveTo(cx-5,cy+4, cx-4,cy-2, cx,cy-6);
+      ctx.bezierCurveTo(cx+4,cy-2, cx+5,cy+4, cx,cy+8); ctx.fill();
+      break;
+    }
+    case 'damaged': {
+      ctx.fillStyle='#8B6914';
+      ctx.fillRect(cx-11, cy-11, 22, 22);
+      ctx.strokeStyle='#ffcc00'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(cx-4,cy-11); ctx.lineTo(cx,cy-3);
+      ctx.lineTo(cx-2,cy+3); ctx.lineTo(cx+3,cy+9); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx+5,cy-11); ctx.lineTo(cx+2,cy-5); ctx.stroke();
+      break;
+    }
+    case 'temp_exc': {
+      ctx.fillStyle='#e74c3c';
+      ctx.fillRect(cx-4, cy-13, 8, 18);
+      ctx.beginPath(); ctx.arc(cx, cy+7, 6, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle='#ff0000'; ctx.fillRect(cx-2, cy-11, 4, 18);
+      ctx.fillStyle='#ffcc00'; ctx.font='bold 10px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('!', cx+9, cy-9);
+      break;
+    }
+    case 'unsigned': {
+      ctx.fillStyle='#7f8c8d';
+      ctx.fillRect(cx-10, cy-13, 20, 26);
+      ctx.fillStyle='#95a5a6';
+      for (let i=0;i<4;i++) ctx.fillRect(cx-7, cy-9+i*5, 14, 2);
+      ctx.strokeStyle='#e74c3c'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(cx-5,cy+5); ctx.lineTo(cx+5,cy+11);
+      ctx.moveTo(cx+5,cy+5); ctx.lineTo(cx-5,cy+11); ctx.stroke();
+      break;
+    }
+  }
+  ctx.restore();
+  ctx.textAlign='left';
+}
+
+function drawPlayer() {
+  if (P.inv > 0 && Math.floor(frame/4)%2 === 0) return;
+  const cx = P.x + P.w/2, top = P.y;
+  const d  = P.right ? 1 : -1;
+  ctx.save();
+  ctx.translate(cx, top);
+  ctx.scale(d, 1);
+
+  // Legs
+  ctx.fillStyle = '#2c3e50';
+  ctx.fillRect(-8, -6, 7, 18);
+  ctx.fillRect( 1, -6, 7, 18);
+  // Shoes
+  ctx.fillStyle = '#1a252f';
+  ctx.fillRect(-9, 11, 9, 5);
+  ctx.fillRect( 1, 11, 9, 5);
+  // Body (uniform)
+  ctx.fillStyle = '#2980b9';
+  ctx.fillRect(-8,-24, 16, 18);
+  // Clipboard
+  ctx.fillStyle = '#ecf0f1';
+  ctx.fillRect(7, -21, 11, 15);
+  ctx.fillStyle = '#bdc3c7';
+  for (let i=0;i<3;i++) ctx.fillRect(9,-18+i*4,7,2);
+  ctx.fillStyle = '#3498db';
+  ctx.fillRect(10,-23, 6, 3);
+  // Head
+  ctx.fillStyle = '#fad5a5';
+  ctx.beginPath(); ctx.arc(0,-30, 8, 0, Math.PI*2); ctx.fill();
+  // Hair
+  ctx.fillStyle = '#4a3728';
+  ctx.fillRect(-8,-38,16,10);
+  ctx.beginPath(); ctx.arc(0,-38,8,Math.PI,0); ctx.fill();
+  // Eyes
+  ctx.fillStyle = '#2c3e50';
+  ctx.fillRect( 2,-33,3,3);
+  ctx.fillRect(-5,-33,3,3);
+
+  ctx.restore();
+}
+
+function drawPlatforms(plats, color) {
+  for (const pl of plats) {
+    if (pl.w === W) {
+      ctx.fillStyle = color;
+      ctx.fillRect(pl.x, pl.y, pl.w, pl.h);
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      for (let x=0; x<W; x+=50) ctx.fillRect(x, pl.y, 2, pl.h);
+    } else {
+      ctx.fillStyle = color;
+      ctx.fillRect(pl.x, pl.y, pl.w, pl.h);
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(pl.x, pl.y, pl.w, 3);
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.fillRect(pl.x+6, pl.y+pl.h, 5, 14);
+      ctx.fillRect(pl.x+pl.w-11, pl.y+pl.h, 5, 14);
+    }
+  }
+}
+
+function drawExit(ex) {
+  const unlocked = collected >= needed;
+  const g = (Math.sin(frame*0.06)+1)/2;
+  ctx.fillStyle = unlocked ? `rgba(46,204,113,${0.6+0.4*g})` : '#636e72';
+  ctx.fillRect(ex.x, ex.y, ex.w, ex.h);
+  ctx.fillStyle = unlocked ? '#27ae60' : '#4a5568';
+  ctx.fillRect(ex.x+3, ex.y+3, ex.w-6, ex.h-3);
+  // handle
+  ctx.fillStyle = '#f39c12';
+  ctx.beginPath(); ctx.arc(ex.x+ex.w-10, ex.y+ex.h/2, 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 10px sans-serif'; ctx.textAlign='center';
+  if (unlocked) {
+    ctx.fillText('EXIT', ex.x+ex.w/2, ex.y-7);
+    ctx.fillText('▶▶', ex.x+ex.w/2, ex.y+ex.h/2+5);
+  } else {
+    ctx.fillText(`${collected}/${needed}`, ex.x+ex.w/2, ex.y-7);
+    ctx.fillText('🔒', ex.x+ex.w/2-6, ex.y+ex.h/2+5);
+  }
+  ctx.textAlign='left';
+}
+
+function drawBg(lv) {
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0, lv.bgColor[0]); g.addColorStop(1, lv.bgColor[1]);
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  if (lvIdx === 0) {
+    // Warehouse shelving silhouettes
+    ctx.strokeStyle = 'rgba(100,70,40,0.3)'; ctx.lineWidth=2;
+    for (let x=0; x<W; x+=180) {
+      ctx.beginPath(); ctx.moveTo(x+5,50); ctx.lineTo(x+5,GY); ctx.stroke();
+      for (let y=80; y<GY; y+=90) {
+        ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+175,y); ctx.stroke();
       }
     }
-}
-
-// ── Render ────────────────────────────────────────────────────────────────────
-
-function drawBubble(x, y, col, r = R) {
-  // Base fill
-  const headImg = HEAD_IMGS[col];
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  if (headImg) {
-    ctx.fillStyle = '#fad5a5';   // skin-tone background shown while image loads
-    ctx.fill();
-    if (headImg.complete && headImg.naturalWidth > 0) {
-      ctx.save();
-      ctx.clip();   // path still active after fill(); clip to the circle
-      ctx.drawImage(headImg, x - r, y - r, r * 2, r * 2);
-      ctx.restore();
-    }
+    // Cold zone hint
+    ctx.fillStyle='rgba(52,152,219,0.08)';
+    ctx.fillRect(0,80,210,GY-80);
+    ctx.fillStyle='rgba(52,152,219,0.35)';
+    ctx.font='10px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('COLD ZONE',105,100); ctx.textAlign='left';
   } else {
-    ctx.fillStyle = col;
-    ctx.fill();
+    // Distribution truck outline
+    ctx.strokeStyle='rgba(80,140,80,0.25)'; ctx.lineWidth=3;
+    ctx.strokeRect(570,180,210,270);
+    ctx.beginPath(); ctx.moveTo(570,250); ctx.lineTo(780,250); ctx.stroke();
+    ctx.beginPath(); ctx.arc(605,450,22,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(745,450,22,0,Math.PI*2); ctx.stroke();
+    // Route dashes
+    ctx.strokeStyle='rgba(255,255,0,0.12)'; ctx.lineWidth=2;
+    ctx.setLineDash([18,10]);
+    ctx.beginPath(); ctx.moveTo(30,GY+32); ctx.lineTo(W-30,GY+32); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='rgba(100,200,100,0.3)';
+    ctx.font='10px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('LOADING BAY',675,215); ctx.textAlign='left';
   }
-
-  // Outline
-  ctx.strokeStyle = headImg ? 'rgba(180,120,60,.5)' : 'rgba(255,255,255,.18)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // Glossy sheen (same for all bubble types)
-  const g = ctx.createRadialGradient(x - r * .32, y - r * .35, r * .05, x, y, r);
-  g.addColorStop(0,   'rgba(255,255,255,.48)');
-  g.addColorStop(.5,  'rgba(255,255,255,0)');
-  g.addColorStop(1,   'rgba(0,0,0,.20)');
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fillStyle = g;
-  ctx.fill();
 }
 
-function drawWijntje() {
-  const now = Date.now();
-  if (!wijntjeTimer || now >= wijntjeTimer) return;
-
-  const elapsed   = now - wijntjeStart;
-  const remaining = wijntjeTimer - now;
-  const fadeIn  = 180;   // ms to reach full opacity
-  const fadeOut = 450;   // ms to fade out at the end
-  const alpha = elapsed < fadeIn   ? elapsed / fadeIn
-              : remaining < fadeOut ? remaining / fadeOut
-              : 1;
-
-  const bw = 294, bh = 62;
-  const bx = (W - bw) / 2;
-  const by = H / 2 - 110;
-
-  ctx.save();
-  ctx.globalAlpha = alpha;
-
-  // Card background
-  ctx.fillStyle = 'rgba(12, 8, 30, 0.93)';
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, 10);
-  else ctx.rect(bx, by, bw, bh);
-  ctx.fill();
-
-  // Gold border
-  ctx.strokeStyle = 'rgba(255, 210, 50, 0.8)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  // Message
-  ctx.fillStyle = '#ffd740';
-  ctx.font = 'bold 25px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(WIJNTJE_TEXT, W / 2, by + bh / 2 + 9);
-  ctx.textAlign = 'left';
-
-  ctx.restore();
-}
-
-function drawAimGuide() {
-  // Pre-compute distance to first wall hit so we can guarantee
-  // AIM_GUIDE_POST_BOUNCE pixels are drawn past that bounce point.
-  const initVx  = Math.cos(shooter.angle);
-  const tToWall = initVx < 0 ? (R - shooter.x) / initVx
-                : initVx > 0 ? (W - R - shooter.x) / initVx
-                : Infinity;
-  const total = isFinite(tToWall)
-    ? Math.max(AIM_GUIDE_LENGTH, tToWall + AIM_GUIDE_POST_BOUNCE)
-    : AIM_GUIDE_LENGTH;
-
-  let x = shooter.x, y = shooter.y;
-  let vx = initVx, vy = Math.sin(shooter.angle);
-  let rem = total;
-
-  ctx.save();
-  ctx.setLineDash([6, 10]);
-  ctx.strokeStyle = 'rgba(255,255,255,.28)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-
-  while (rem > 0) {
-    const tL     = vx < 0 ? (R - x) / vx : Infinity;
-    const tR     = vx > 0 ? (W - R - x) / vx : Infinity;
-    const tWall  = Math.min(tL, tR);
-    const hitWall = tWall < rem;
-    const t = hitWall ? tWall : rem;
-    x += vx * t;
-    y += vy * t;
-    ctx.lineTo(x, y);
-    rem -= t;
-    if (hitWall) vx = -vx;
-  }
-
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawOverlay(heading, headingColor, sub, hint) {
-  ctx.fillStyle = 'rgba(0,0,0,.72)';
-  ctx.fillRect(0, 0, W, H);
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 42px sans-serif';
-  ctx.fillStyle = headingColor;
-  ctx.fillText(heading, W / 2, H / 2 - 28);
-  ctx.font = '20px sans-serif';
-  ctx.fillStyle = '#fff';
-  ctx.fillText(sub, W / 2, H / 2 + 16);
-  ctx.font = '13px sans-serif';
-  ctx.fillStyle = 'rgba(255,255,255,.52)';
-  ctx.fillText(hint, W / 2, H / 2 + 52);
-  ctx.textAlign = 'left';
-}
-
-function draw() {
-  ctx.fillStyle = '#16213e';
-  ctx.fillRect(0, 0, W, H);
-
-  // Grid bubbles
-  for (let r = 0; r < MAX_ROWS; r++)
-    for (let c = 0; c < colCount(r); c++)
-      if (grid[r][c]) { const { x, y } = cellXY(r, c); drawBubble(x, y, grid[r][c]); }
-
-  // Flying bubble
-  if (flying) drawBubble(flying.x, flying.y, flying.color);
-
-  // Aim guide (only when active)
-  if (!gameOver && !winner) drawAimGuide();
-
-  // Shooter panel divider
-  ctx.strokeStyle = 'rgba(255,255,255,.07)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0, H - 90); ctx.lineTo(W, H - 90); ctx.stroke();
-
-  // Current bubble in shooter
-  drawBubble(shooter.x, shooter.y, shooter.color);
-
-  // Next bubble
-  ctx.fillStyle = 'rgba(255,255,255,.42)';
-  ctx.font = '11px sans-serif';
-  ctx.fillText('NEXT', 20, H - 63);
-  drawBubble(42, H - 40, shooter.next, R * .65);
-
+function drawHUD() {
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0,0,W,42);
+  const lv = LEVELS[lvIdx];
+  // Level name
+  ctx.fillStyle='#f1c40f'; ctx.font='bold 13px sans-serif';
+  ctx.fillText(lv.name, 10, 17);
+  // Hint
+  ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.font='10px sans-serif';
+  ctx.fillText(lv.hint, 10, 33);
+  // Lives
+  ctx.fillStyle='#e74c3c'; ctx.font='bold 18px sans-serif';
+  ctx.textAlign='right';
+  ctx.fillText('♥'.repeat(Math.max(0,lives)), W-10, 20);
+  ctx.textAlign='left';
   // Score
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 16px sans-serif';
-  ctx.textAlign = 'right';
-  ctx.fillText(`Score: ${score}`, W - 12, H - 36);
-  ctx.textAlign = 'left';
-
-  // Shots-until-next-row counter
-  const shotsLeft = SHOTS_PER_NEW_ROW - (shotsFired % SHOTS_PER_NEW_ROW);
-  ctx.fillStyle = 'rgba(255,255,255,.35)';
-  ctx.font = '11px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(`New row in ${shotsLeft} shot${shotsLeft === 1 ? '' : 's'}`, W / 2, H - 8);
-  ctx.textAlign = 'left';
-
-  // Toast and overlays
-  drawWijntje();
-  if (winner)   drawOverlay('You Win!',  '#f1c40f', `Score: ${score}`, 'Tap or click to play again');
-  if (gameOver) drawOverlay('Game Over', '#e74c3c', `Score: ${score}`, 'Tap or click to restart');
+  ctx.fillStyle='#fff'; ctx.font='12px sans-serif';
+  ctx.textAlign='right';
+  ctx.fillText(`Score: ${score}`, W-10, 36);
+  ctx.textAlign='left';
+  // Progress bar
+  const bx=W/2-90, bw=180, prog=Math.min(1,collected/needed);
+  ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.fillRect(bx,8,bw,14);
+  ctx.fillStyle = prog>=1 ? '#2ecc71' : '#3498db';
+  ctx.fillRect(bx,8,bw*prog,14);
+  ctx.strokeStyle='rgba(255,255,255,0.4)'; ctx.lineWidth=1;
+  ctx.strokeRect(bx,8,bw,14);
+  ctx.fillStyle='#fff'; ctx.font='bold 9px sans-serif'; ctx.textAlign='center';
+  ctx.fillText(`${collected}/${needed} items`, W/2, 19);
+  ctx.textAlign='left';
 }
 
-// ── Input ─────────────────────────────────────────────────────────────────────
+// ─── Screen renderers ─────────────────────────────────────────────────────────
+function drawTitle() {
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0d1b2a'); g.addColorStop(1,'#162436');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
 
-function setAngle(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  // Convert CSS pixels → internal canvas pixels before comparing with shooter coords
-  const dx = (clientX - rect.left) * (W / rect.width)  - shooter.x;
-  const dy = (clientY - rect.top)  * (H / rect.height) - shooter.y;
-  shooter.angle = Math.max(-Math.PI + .15, Math.min(-.15, Math.atan2(dy, dx)));
+  // Title
+  ctx.textAlign='center';
+  ctx.shadowColor='#3498db'; ctx.shadowBlur=20;
+  ctx.fillStyle='#3498db'; ctx.font='bold 54px sans-serif';
+  ctx.fillText('GDP GUARDIAN', W/2, 110);
+  ctx.shadowBlur=0;
+  ctx.fillStyle='#f1c40f'; ctx.font='italic 18px sans-serif';
+  ctx.fillText('Good Distribution Practices Training', W/2, 148);
+
+  ctx.strokeStyle='rgba(52,152,219,0.4)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(W/2-220,165); ctx.lineTo(W/2+220,165); ctx.stroke();
+
+  ctx.fillStyle='#ecf0f1'; ctx.font='15px sans-serif';
+  ctx.fillText('Play as a GDP Inspector navigating a pharmaceutical supply chain!', W/2, 195);
+  ctx.fillText('Collect compliant items. Avoid GDP violations.', W/2, 218);
+
+  ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.font='13px sans-serif';
+  ctx.fillText('Arrow Keys / WASD to move  ·  Up / W / Space to jump', W/2, 255);
+
+  // animated inspector
+  const bob = Math.sin(frame*0.05)*6;
+  ctx.save(); ctx.translate(W/2, 330+bob);
+  ctx.fillStyle='#2980b9'; ctx.fillRect(-10,-22,20,20);
+  ctx.fillStyle='#fad5a5'; ctx.beginPath(); ctx.arc(0,-28,9,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#4a3728'; ctx.fillRect(-9,-36,18,9); ctx.beginPath(); ctx.arc(0,-36,9,Math.PI,0); ctx.fill();
+  ctx.fillStyle='#ecf0f1'; ctx.fillRect(10,-18,12,16);
+  ctx.fillStyle='#3498db'; ctx.fillRect(13,-20,6,3);
+  ctx.restore();
+
+  // Start button
+  const pulse = (Math.sin(frame*0.08)+1)/2;
+  ctx.fillStyle = `rgba(39,174,96,${0.7+0.3*pulse})`;
+  roundRect(W/2-110, 380, 220, 52, 8); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 20px sans-serif';
+  ctx.fillText('▶  START TRAINING', W/2, 413);
+  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.font='12px sans-serif';
+  ctx.fillText('Click or press any key to begin', W/2, 465);
+  ctx.textAlign='left';
 }
 
-canvas.addEventListener('mousemove', e => setAngle(e.clientX, e.clientY));
+function drawLevelComplete() {
+  ctx.fillStyle='rgba(0,0,0,0.88)'; ctx.fillRect(0,0,W,H);
+  const lv = LEVELS[lvIdx];
+  const tip = lv.tip;
+  ctx.textAlign='center';
 
-canvas.addEventListener('click', () => {
-  if (gameOver || winner) { init(); return; }
-  shoot();
-});
+  ctx.fillStyle='#2ecc71'; ctx.font='bold 38px sans-serif';
+  ctx.fillText('✔  Level Complete!', W/2, 72);
+  ctx.fillStyle='#f1c40f'; ctx.font='bold 16px sans-serif';
+  ctx.fillText('GDP Training Checkpoint', W/2, 105);
 
-// Touch UX: drag to aim, lift finger to shoot.
-// touchRestarted prevents the touchend of a restart gesture from also firing a shot.
-let touchRestarted = false;
+  // Tip card
+  const cx=50, cy=125, cw=W-100, ch=210;
+  ctx.fillStyle='rgba(52,152,219,0.15)';
+  roundRect(cx,cy,cw,ch,10); ctx.fill();
+  ctx.strokeStyle='#3498db'; ctx.lineWidth=2;
+  roundRect(cx,cy,cw,ch,10); ctx.stroke();
+
+  ctx.fillStyle='#3498db'; ctx.font='bold 15px sans-serif';
+  ctx.fillText(tip.title, W/2, cy+30);
+
+  ctx.font='13px sans-serif'; ctx.textAlign='left';
+  tip.lines.forEach((l,i)=>{
+    ctx.fillStyle='#2ecc71'; ctx.fillText('✓', cx+18, cy+62+i*42);
+    ctx.fillStyle='#ecf0f1'; ctx.fillText(l, cx+35, cy+62+i*42);
+  });
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#f1c40f'; ctx.font='bold 15px sans-serif';
+  ctx.fillText(`Score: ${score}   Lives remaining: ${'♥'.repeat(lives)}`, W/2, 370);
+
+  const isLast = lvIdx >= LEVELS.length-1;
+  const pulse = (Math.sin(frame*0.08)+1)/2;
+  ctx.fillStyle=`rgba(39,174,96,${0.7+0.3*pulse})`;
+  roundRect(W/2-120, 395, 240, 52, 8); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
+  ctx.fillText(isLast ? '🏆  FINISH TRAINING' : 'NEXT LEVEL  ▶', W/2, 428);
+  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.font='11px sans-serif';
+  ctx.fillText('Click or press any key', W/2, 475);
+  ctx.textAlign='left';
+}
+
+function drawGameOver() {
+  ctx.fillStyle='rgba(0,0,0,0.88)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#e74c3c'; ctx.font='bold 50px sans-serif';
+  ctx.fillText('AUDIT FAILED', W/2, 185);
+  ctx.fillStyle='#ecf0f1'; ctx.font='17px sans-serif';
+  ctx.fillText('The GDP inspector collapsed on the job.', W/2, 233);
+  ctx.fillText('Remember: GDP failures can put patients at risk!', W/2, 260);
+  ctx.fillStyle='#f1c40f'; ctx.font='bold 16px sans-serif';
+  ctx.fillText(`Final Score: ${score}`, W/2, 305);
+  const pulse=(Math.sin(frame*0.08)+1)/2;
+  ctx.fillStyle=`rgba(231,76,60,${0.7+0.3*pulse})`;
+  roundRect(W/2-105,340,210,52,8); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
+  ctx.fillText('TRY AGAIN', W/2, 373);
+  ctx.textAlign='left';
+}
+
+function drawWin() {
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0a1628'); g.addColorStop(1,'#1a3a1a');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // confetti
+  for (let i=0;i<28;i++) {
+    const px=(i*137+frame*2.5)%W, py=(i*91+frame*1.8)%H;
+    ctx.fillStyle=['#f1c40f','#2ecc71','#3498db','#e74c3c','#9b59b6'][i%5];
+    ctx.fillRect(px,py,7,7);
+  }
+
+  ctx.textAlign='center';
+  ctx.shadowColor='#f1c40f'; ctx.shadowBlur=20;
+  ctx.fillStyle='#f1c40f'; ctx.font='bold 42px sans-serif';
+  ctx.fillText('TRAINING COMPLETE!', W/2, 115);
+  ctx.shadowBlur=0;
+  ctx.fillStyle='#2ecc71'; ctx.font='bold 20px sans-serif';
+  ctx.fillText('You are now a certified GDP Guardian!', W/2, 155);
+
+  // certificate
+  const cx=80,cy=180,cw=W-160,ch=185;
+  ctx.fillStyle='rgba(255,255,255,0.04)';
+  roundRect(cx,cy,cw,ch,10); ctx.fill();
+  ctx.strokeStyle='#f1c40f'; ctx.lineWidth=3;
+  roundRect(cx,cy,cw,ch,10); ctx.stroke();
+  ctx.fillStyle='#f1c40f'; ctx.font='bold 15px sans-serif';
+  ctx.fillText('CERTIFICATE OF COMPLETION', W/2, cy+35);
+  ctx.fillStyle='#ecf0f1'; ctx.font='14px sans-serif';
+  ctx.fillText('This certifies successful completion of', W/2, cy+65);
+  ctx.font='bold 16px sans-serif';
+  ctx.fillText('Good Distribution Practices (GDP) Awareness Training', W/2, cy+90);
+  ctx.font='13px sans-serif'; ctx.fillStyle='rgba(255,255,255,0.7)';
+  ctx.fillText('Key principles covered: Temperature Control · FEFO · Cold Chain · Documentation', W/2, cy+122);
+  ctx.fillStyle='#2ecc71'; ctx.font='bold 22px sans-serif';
+  ctx.fillText(`Final Score: ${score}`, W/2, cy+160);
+
+  const pulse=(Math.sin(frame*0.08)+1)/2;
+  ctx.fillStyle=`rgba(39,174,96,${0.7+0.3*pulse})`;
+  roundRect(W/2-110,395,220,52,8); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
+  ctx.fillText('▶  PLAY AGAIN', W/2, 428);
+  ctx.textAlign='left';
+}
+
+// ─── Touch controls (on-screen buttons) ───────────────────────────────────────
+function drawTouchButtons() {
+  const btns = [
+    { id:'left',  x:40,   y:H-55, label:'◀' },
+    { id:'right', x:110,  y:H-55, label:'▶' },
+    { id:'jump',  x:W-55, y:H-55, label:'▲' },
+  ];
+  for (const b of btns) {
+    ctx.fillStyle = touch[b.id] ? 'rgba(52,152,219,0.7)' : 'rgba(255,255,255,0.25)';
+    ctx.beginPath(); ctx.arc(b.x, b.y, 28, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 20px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(b.label, b.x, b.y+7);
+    ctx.textAlign='left';
+  }
+}
+
+function touchBtn(cx,cy,x,y) { return Math.hypot(cx-x, cy-y) < 35; }
+function scaleToCanvas(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return { x: clientX * (W/r.width), y: clientY * (H/r.height) };
+}
 
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
-  if (gameOver || winner) { init(); touchRestarted = true; return; }
-  touchRestarted = false;
-  setAngle(e.touches[0].clientX, e.touches[0].clientY);
-}, { passive: false });
-
-canvas.addEventListener('touchmove', e => {
-  e.preventDefault();
-  if (e.touches.length) setAngle(e.touches[0].clientX, e.touches[0].clientY);
-}, { passive: false });
+  if (state !== 'playing') { handleAction(); return; }
+  for (const t of e.changedTouches) {
+    const r = canvas.getBoundingClientRect();
+    const {x,y} = scaleToCanvas(t.clientX - r.left, t.clientY - r.top);
+    if (touchBtn(x,y,40,H-55))   touch.left  = true;
+    if (touchBtn(x,y,110,H-55))  touch.right = true;
+    if (touchBtn(x,y,W-55,H-55)) touch.jump  = true;
+  }
+}, {passive:false});
 
 canvas.addEventListener('touchend', e => {
   e.preventDefault();
-  if (touchRestarted) { touchRestarted = false; return; }
-  shoot();
-}, { passive: false });
-
-document.addEventListener('keydown', e => {
-  if (e.code === 'Space') {
-    e.preventDefault();
-    if (gameOver || winner) init(); else shoot();
+  touch.left = touch.right = touch.jump = false;
+  for (const t of e.touches) {
+    const r = canvas.getBoundingClientRect();
+    const {x,y} = scaleToCanvas(t.clientX - r.left, t.clientY - r.top);
+    if (touchBtn(x,y,40,H-55))   touch.left  = true;
+    if (touchBtn(x,y,110,H-55))  touch.right = true;
+    if (touchBtn(x,y,W-55,H-55)) touch.jump  = true;
   }
+}, {passive:false});
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  touch.left = touch.right = touch.jump = false;
+  for (const t of e.touches) {
+    const r = canvas.getBoundingClientRect();
+    const {x,y} = scaleToCanvas(t.clientX - r.left, t.clientY - r.top);
+    if (touchBtn(x,y,40,H-55))   touch.left  = true;
+    if (touchBtn(x,y,110,H-55))  touch.right = true;
+    if (touchBtn(x,y,W-55,H-55)) touch.jump  = true;
+  }
+}, {passive:false});
+
+// ─── Action handler (click / key for non-playing states) ─────────────────────
+function handleAction() {
+  if (state === 'title')         { startGame(); }
+  else if (state === 'levelComplete') {
+    if (lvIdx < LEVELS.length-1) loadLevel(lvIdx+1);
+    else state = 'win';
+  }
+  else if (state === 'gameOver') { startGame(); }
+  else if (state === 'win')      { startGame(); }
+}
+
+canvas.addEventListener('click', handleAction);
+document.addEventListener('keydown', e => {
+  if (state !== 'playing') handleAction();
 });
 
-// ── Run ───────────────────────────────────────────────────────────────────────
+// ─── Main loop ────────────────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0,0,W,H);
+  if (state === 'title')         { drawTitle(); return; }
+  if (state === 'levelComplete') { drawLevelComplete(); return; }
+  if (state === 'gameOver')      { drawGameOver(); return; }
+  if (state === 'win')           { drawWin(); return; }
 
-init();
-(function loop() { update(); draw(); requestAnimationFrame(loop); })();
+  const lv = LEVELS[lvIdx];
+  drawBg(lv);
+  drawPlatforms(lv.platforms, lv.fgColor);
+  lv.items.forEach(drawItem);
+  drawExit(lv.exit);
+  drawPlayer();
+  drawHUD();
+  if ('ontouchstart' in window) drawTouchButtons();
+}
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+loop();
 </script>
 </body>
 </html>
