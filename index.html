@@ -3,16 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0d1b2a">
   <title>GDP Guardian</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+    }
     body {
+      position: fixed;           /* stop iOS rubber-band scroll */
+      width: 100%;
+      height: 100vh;
+      height: 100dvh;            /* dynamic viewport — excludes browser chrome */
       background: #0d1b2a;
       display: flex;
-      flex-direction: column;
       justify-content: center;
       align-items: center;
-      min-height: 100vh;
       font-family: 'Segoe UI', sans-serif;
     }
     canvas {
@@ -22,10 +31,43 @@
       touch-action: none;
       user-select: none;
       -webkit-user-select: none;
+      cursor: pointer;
     }
+    /* Portrait-mode overlay — shown by JS */
+    #rotate {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #0d1b2a;
+      color: #fff;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 99;
+      text-align: center;
+      padding: 24px;
+      gap: 20px;
+    }
+    #rotate svg { animation: spin 2s linear infinite; }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    #rotate p { font-size: clamp(14px, 4vw, 22px); line-height: 1.5;
+                color: rgba(255,255,255,0.85); }
+    #rotate strong { color: #f1c40f; font-size: 1.1em; }
   </style>
 </head>
 <body>
+<!-- Shown only in portrait on touch devices -->
+<div id="rotate">
+  <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#3a86ff" stroke-width="1.5">
+    <rect x="4" y="2" width="16" height="20" rx="2"/>
+    <circle cx="12" cy="17" r="1"/>
+    <path d="M8 2h8" stroke-linecap="round"/>
+  </svg>
+  <p><strong>Please rotate your device</strong><br>This game is best played in landscape mode.</p>
+</div>
 <canvas id="game"></canvas>
 <script>
 // ─── GDP GUARDIAN ─── Good Distribution Practices Training Game ───────────────
@@ -34,12 +76,29 @@ const ctx    = canvas.getContext('2d');
 const W = 800, H = 530;
 canvas.width = W; canvas.height = H;
 
+// ─── Touch detection (cached once) ───────────────────────────────────────────
+const hasTouchScreen = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+
+// ─── Fit canvas + portrait guard ─────────────────────────────────────────────
+const rotateEl = document.getElementById('rotate');
+
 function fitCanvas() {
-  const s = Math.min(window.innerWidth / W, window.innerHeight / H, 1);
+  // visualViewport gives the true visible area on iOS (excludes safari chrome)
+  const vw = (window.visualViewport || window).width  || window.innerWidth;
+  const vh = (window.visualViewport || window).height || window.innerHeight;
+  const s  = Math.min(vw / W, vh / H);   // no cap — fill the screen on tablets/phones
   canvas.style.width  = Math.round(W * s) + 'px';
   canvas.style.height = Math.round(H * s) + 'px';
+
+  // Show rotate prompt only on touch devices in portrait
+  if (rotateEl) rotateEl.style.display =
+    (hasTouchScreen && window.innerWidth < window.innerHeight) ? 'flex' : 'none';
 }
+
 window.addEventListener('resize', fitCanvas);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', fitCanvas);
+}
 fitCanvas();
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -559,7 +618,9 @@ function drawTitle() {
   ctx.fillText('Collect compliant items. Avoid GDP violations.', W/2, 218);
 
   ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.font='13px sans-serif';
-  ctx.fillText('Arrow Keys / WASD to move  ·  Up / W / Space to jump', W/2, 255);
+  ctx.fillText(hasTouchScreen
+    ? 'Use the on-screen ◀ ▶ buttons to move  ·  ▲ to jump'
+    : 'Arrow Keys / WASD to move  ·  Up / W / Space to jump', W/2, 255);
 
   // animated inspector
   const bob = Math.sin(frame*0.05)*6;
@@ -578,7 +639,7 @@ function drawTitle() {
   ctx.fillStyle='#fff'; ctx.font='bold 20px sans-serif';
   ctx.fillText('▶  START TRAINING', W/2, 413);
   ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.font='12px sans-serif';
-  ctx.fillText('Click or press any key to begin', W/2, 465);
+  ctx.fillText(hasTouchScreen ? 'Tap anywhere to begin' : 'Click or press any key to begin', W/2, 465);
   ctx.textAlign='left';
 }
 
@@ -620,7 +681,7 @@ function drawLevelComplete() {
   ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
   ctx.fillText(isLast ? '🏆  FINISH TRAINING' : 'NEXT LEVEL  ▶', W/2, 428);
   ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.font='11px sans-serif';
-  ctx.fillText('Click or press any key', W/2, 475);
+  ctx.fillText(hasTouchScreen ? 'Tap to continue' : 'Click or press any key', W/2, 475);
   ctx.textAlign='left';
 }
 
@@ -688,62 +749,78 @@ function drawWin() {
 }
 
 // ─── Touch controls (on-screen buttons) ───────────────────────────────────────
+// Button centres in canvas-pixel space. Hit radius is intentionally larger than draw radius.
+const TBTN = {
+  left:  { x: 55,    y: H - 62 },
+  right: { x: 155,   y: H - 62 },
+  jump:  { x: W - 70, y: H - 62 },
+};
+const DRAW_R = 34;   // visual circle radius (canvas px)
+const HIT_R  = 52;   // tap detection radius  (canvas px) — big for fat fingers
+
 function drawTouchButtons() {
-  const btns = [
-    { id:'left',  x:40,   y:H-55, label:'◀' },
-    { id:'right', x:110,  y:H-55, label:'▶' },
-    { id:'jump',  x:W-55, y:H-55, label:'▲' },
-  ];
-  for (const b of btns) {
-    ctx.fillStyle = touch[b.id] ? 'rgba(52,152,219,0.7)' : 'rgba(255,255,255,0.25)';
-    ctx.beginPath(); ctx.arc(b.x, b.y, 28, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 20px sans-serif'; ctx.textAlign='center';
-    ctx.fillText(b.label, b.x, b.y+7);
-    ctx.textAlign='left';
+  if (!hasTouchScreen) return;
+  ctx.save();
+  ctx.globalAlpha = 0.85;
+  for (const [id, b] of Object.entries(TBTN)) {
+    const active = touch[id];
+    // shadow glow when pressed
+    ctx.shadowColor = active ? '#3498db' : 'transparent';
+    ctx.shadowBlur  = active ? 18 : 0;
+    ctx.fillStyle   = active ? 'rgba(52,152,219,0.75)' : 'rgba(255,255,255,0.22)';
+    ctx.strokeStyle = active ? '#74b9ff' : 'rgba(255,255,255,0.45)';
+    ctx.lineWidth   = 2;
+    ctx.beginPath(); ctx.arc(b.x, b.y, DRAW_R, 0, Math.PI*2);
+    ctx.fill(); ctx.stroke();
   }
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('◀', TBTN.left.x,  TBTN.left.y  + 8);
+  ctx.fillText('▶', TBTN.right.x, TBTN.right.y + 8);
+  ctx.fillText('▲', TBTN.jump.x,  TBTN.jump.y  + 8);
+  ctx.textAlign = 'left';
+  ctx.restore();
 }
 
-function touchBtn(cx,cy,x,y) { return Math.hypot(cx-x, cy-y) < 35; }
-function scaleToCanvas(clientX, clientY) {
+function canvasCoords(clientX, clientY) {
   const r = canvas.getBoundingClientRect();
-  return { x: clientX * (W/r.width), y: clientY * (H/r.height) };
+  return {
+    x: (clientX - r.left) * (W / r.width),
+    y: (clientY - r.top)  * (H / r.height),
+  };
+}
+
+function applyTouches(touchList) {
+  touch.left = touch.right = touch.jump = false;
+  for (const t of touchList) {
+    const {x, y} = canvasCoords(t.clientX, t.clientY);
+    if (Math.hypot(x - TBTN.left.x,  y - TBTN.left.y)  < HIT_R) touch.left  = true;
+    if (Math.hypot(x - TBTN.right.x, y - TBTN.right.y) < HIT_R) touch.right = true;
+    if (Math.hypot(x - TBTN.jump.x,  y - TBTN.jump.y)  < HIT_R) touch.jump  = true;
+  }
 }
 
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
   if (state !== 'playing') { handleAction(); return; }
-  for (const t of e.changedTouches) {
-    const r = canvas.getBoundingClientRect();
-    const {x,y} = scaleToCanvas(t.clientX - r.left, t.clientY - r.top);
-    if (touchBtn(x,y,40,H-55))   touch.left  = true;
-    if (touchBtn(x,y,110,H-55))  touch.right = true;
-    if (touchBtn(x,y,W-55,H-55)) touch.jump  = true;
-  }
-}, {passive:false});
-
-canvas.addEventListener('touchend', e => {
-  e.preventDefault();
-  touch.left = touch.right = touch.jump = false;
-  for (const t of e.touches) {
-    const r = canvas.getBoundingClientRect();
-    const {x,y} = scaleToCanvas(t.clientX - r.left, t.clientY - r.top);
-    if (touchBtn(x,y,40,H-55))   touch.left  = true;
-    if (touchBtn(x,y,110,H-55))  touch.right = true;
-    if (touchBtn(x,y,W-55,H-55)) touch.jump  = true;
-  }
-}, {passive:false});
+  applyTouches(e.touches);
+}, {passive: false});
 
 canvas.addEventListener('touchmove', e => {
   e.preventDefault();
+  applyTouches(e.touches);
+}, {passive: false});
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (state !== 'playing') return;
+  applyTouches(e.touches);   // re-evaluate with remaining touches
+}, {passive: false});
+
+canvas.addEventListener('touchcancel', e => {
   touch.left = touch.right = touch.jump = false;
-  for (const t of e.touches) {
-    const r = canvas.getBoundingClientRect();
-    const {x,y} = scaleToCanvas(t.clientX - r.left, t.clientY - r.top);
-    if (touchBtn(x,y,40,H-55))   touch.left  = true;
-    if (touchBtn(x,y,110,H-55))  touch.right = true;
-    if (touchBtn(x,y,W-55,H-55)) touch.jump  = true;
-  }
-}, {passive:false});
+}, {passive: false});
 
 // ─── Action handler (click / key for non-playing states) ─────────────────────
 function handleAction() {
@@ -776,7 +853,7 @@ function draw() {
   drawExit(lv.exit);
   drawPlayer();
   drawHUD();
-  if ('ontouchstart' in window) drawTouchButtons();
+  drawTouchButtons();   // no-ops when hasTouchScreen is false
 }
 
 function loop() { update(); draw(); requestAnimationFrame(loop); }
